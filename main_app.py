@@ -12,6 +12,7 @@ from Markov_Chain_For_Chords import MarkovChain, JazzChord
 from key_detector import ScaleDetector, Key, ScaleType
 from Phrase_Analysis import PhraseAnalyzer, Note, Phrase, BeatStrength
 from melody_generator import MelodyGenerator, create_melody_for_progression
+from standard_finder import JazzStandardsScraper
 
 class CreativityLevel(Enum):
     CONSERVATIVE = 0.3
@@ -407,6 +408,19 @@ def interactive_demo():
         app.display_progression()
 
 if __name__ == "__main__":
+    # Initialize and scrape
+    scraper = JazzStandardsScraper()
+    standards = scraper.load_standards()  # Load existing
+    if not standards:
+        standards = scraper.create_sample_standards_dataset()  # Create sample data
+        scraper.save_standards(standards)
+
+    # Convert to training data
+    training_data = scraper.convert_to_training_data(standards)
+
+    # Train your Markov chain
+    markov_chain = MarkovChain(order=3)
+    markov_chain.train(training_data)
     # Run the complete demo
     demo_complete_app()
     
