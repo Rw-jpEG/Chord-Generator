@@ -4,7 +4,6 @@ from collections import defaultdict, Counter
 from typing import List, Dict, Tuple, Optional
 import numpy as np
 from JazzChord import JazzChord
-from JazzHarmonizer import JazzHarmonizer
 from Phrase_Analysis import PhraseAnalyzer
 from melody_generator import create_melody_for_progression
 
@@ -301,63 +300,22 @@ def create_sample_progressions() -> List[List[JazzChord]]:
     return progressions
 
 def demo_markov_chain():
-    """Demonstrate the Markov chain in action"""
-    print("=== Jazz Chord Markov Chain Demo ===\n")
+    """Self-contained demo that doesn't depend on other files"""
+    print("=== Markov Chain Demo ===")
     
-    # Create and train the model
+    # Create simple test data directly in this file
+    test_progressions = [
+        [JazzChord("D", "m7"), JazzChord("G", "7"), JazzChord("C", "maj7")],
+        [JazzChord("C", "maj7"), JazzChord("A", "m7"), JazzChord("D", "m7"), JazzChord("G", "7")],
+    ]
+    
     markov = MarkovChain(order=2)
-    training_data = create_sample_progressions()
-    markov.train(training_data)
+    markov.train(test_progressions)
     
-    # Generate some progressions with different temperatures
-    print("\n--- Generated Progressions ---")
-    
-    temperatures = [0.1, 0.5, 1.0, 1.5, 2.0]
-    for temp in temperatures:
-        progression = markov.generate_sequence(length=6, temperature=temp)
-        progression_str = " | ".join(str(chord) for chord in progression)
-        print(f"Temperature {temp:.1f}: {progression_str}")
-    
-    # Show state information
-    print("\n--- State Analysis ---")
-    sample_state = (JazzChord("D", "m7"), JazzChord("G", "7"))
-    state_info = markov.get_state_info(sample_state)
-    print(f"State: {' -> '.join(state_info['state'])}")
-    print("Possible next chords:")
-    for next_chord in state_info['possible_next']:
-        print(f"  {next_chord['chord']}: {next_chord['probability']:.3f}")
-    
-    # Test prediction
-    print("\n--- Prediction Test ---")
-    test_sequence = [JazzChord("C", "maj7"), JazzChord("A", "m7")]
-    next_chord = markov.predict_next(test_sequence, temperature=1.0)
-    sequence_str = " -> ".join(str(chord) for chord in test_sequence)
-    print(f"Given: {sequence_str}")
-    print(f"Predicted next: {next_chord}")
-
-def create_training_data_with_phrases():
-    """Create training data that includes phrase analysis"""
-    progressions = create_sample_progressions()
-    phrase_analyses = []
-    
-    # For each progression, create a corresponding melodic phrase structure
-    for progression in progressions:
-        # Create synthetic melody that matches the progression
-        melody_notes = create_melody_for_progression(progression)
-        
-        # Analyze phrases in the melody
-        analyzer = PhraseAnalyzer()
-        phrases = analyzer.analyze_phrases(melody_notes, total_bars=len(progression))
-        
-        phrase_analyses.append(phrases)
-    
-    return progressions, phrase_analyses
-
-# Train the enhanced model
-progressions, phrase_analyses = create_training_data_with_phrases()
-harmonizer = JazzHarmonizer()
-harmonizer.markov_chain.train_with_phrases(progressions, phrase_analyses)
-
+    # Generate a simple progression
+    progression = markov.generate_sequence(length=4, temperature=1.0)
+    progression_str = " | ".join(str(chord) for chord in progression)
+    print(f"Generated: {progression_str}")
 
 if __name__ == "__main__":
     demo_markov_chain()
