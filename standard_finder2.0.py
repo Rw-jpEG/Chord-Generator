@@ -1,280 +1,112 @@
-# jazzstudies_scraper.py
-import requests
-import time
-import re
+# json_standards_parser.py
 import json
-import os
-from typing import List, Dict, Optional
-from Markov_Chain_For_Chords import JazzChord
+import re
+from typing import List, Dict, Any
+from Markov_Chain_For_Chords import JazzChord, MarkovChain
 
-class JazzStudiesScraper:
-    """Scraper for jazzstudies.us which has direct PDF chord charts"""
+class JazzStandardsParser:
+    """Parser for the jazz standards JSON format with sections and chords"""
     
-    def __init__(self, data_dir: str = "jazz_standards_data"):
-        self.data_dir = data_dir
-        self.base_url = "https://www.jazzstudies.us"
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-        })
-        os.makedirs(data_dir, exist_ok=True)
-        
-    def scrape_all_standards(self) -> List[Dict]:
-        """Scrape ALL standards from jazzstudies.us"""
-        print("🎷 Scraping standards from jazzstudies.us...")
-        
-        # The main page seems to have standards organized
-        main_url = f"{self.base_url}"
+    def __init__(self):
+        self.chord_mappings = {
+            # Major chords
+            "6": "maj7", "M": "maj7", "M7": "maj7", "Δ": "maj7",
+            # Minor chords
+            "m": "m7", "mi": "m7", "min": "m7", "-": "m7",
+            # Dominant chords
+            "dom": "7", "dom7": "7",
+            # Half-diminished
+            "ø": "m7b5", "hdim": "m7b5", "min7b5": "m7b5",
+            # Diminished
+            "dim": "dim7", "°": "dim7",
+            # Suspended
+            "sus": "7sus4", "sus4": "7sus4", "sus2": "7sus2"
+        }
+    
+    def parse_json_file(self, file_path: str) -> List[List[JazzChord]]:
+        """Parse the JSON file and extract chord progressions for training"""
+        print(f"🎷 Parsing jazz standards from {file_path}...")
         
         try:
-            response = self.session.get(main_url, timeout=15)
-            response.raise_for_status()
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
             
-            # Extract standard links - this site might have a different structure
-            standard_links = self._extract_standard_links(response.text)
-            print(f"Found {len(standard_links)} potential standard links")
+            all_progressions = []
             
-            # If no links found on main page, try common paths
-            if not standard_links:
-                standard_links = self._try_common_paths()
-            
-            all_standards = []
-            for i, (title, link_path) in enumerate(standard_links):
-                print(f"  [{i+1}/{len(standard_links)}] Processing: {title}")
-                standard = self._scrape_individual_standard(title, link_path)
-                if standard and standard.get('progression'):
-                    all_standards.append(standard)
-                    print(f"    ✓ {standard['title']} - {len(standard['progression'])} chords")
+            for standard in data:
+                title = standard.get("Title", "Unknown")
+                composer = standard.get("Composer", "Unknown")
+                sections = standard.get("Sections", [])
+                
+                # Extract chords from all sections
+                progression = self._extract_chords_from_sections(sections)
+                
+                if progression:
+                    all_progressions.append(progression)
+                    print(f"  ✓ {title} - {len(progression)} chords")
                 else:
-                    # Use fallback progression based on title
-                    fallback_std = self._create_fallback_standard(title)
-                    if fallback_std:
-                        all_standards.append(fallback_std)
-                        print(f"    ⚠ {title} - using fallback progression")
-                
-                time.sleep(1)  # Be polite
+                    print(f"  ⚠ {title} - No chords extracted")
             
-            print(f"✅ Processed {len(all_standards)} standards")
-            return all_standards
+            print(f"✅ Extracted {len(all_progressions)} progressions from {len(data)} standards")
+            return all_progressions
             
         except Exception as e:
-            print(f"Error scraping main page: {e}")
-            return self._get_comprehensive_fallback_data()
+            print(f"❌ Error parsing JSON file: {e}")
+            return []
     
-    def _extract_standard_links(self, html: str) -> List[tuple]:
-        """Extract standard links from jazzstudies.us"""
-        links = []
+    def _extract_chords_from_sections(self, sections: List[Dict]) -> List[JazzChord]:
+        """Extract chords from all sections of a standard"""
+        all_chords = []
         
-        # Try multiple patterns to find links to standards
-        patterns = [
-            r'<a\s+href="([^"]*\.pdf)"[^>]*>([^<]+)</a>',  # Direct PDF links with titles
-            r'<a\s+href="(/[^"]*)"[^>]*>([^<]*jazz[^<]*)</a>',  # Links with "jazz" in title
-            r'<a\s+href="(/[^"]*)"[^>]*>([^<]*standard[^<]*)</a>',  # Links with "standard" in title
-            r'<a\s+href="(/songs/[^"]*)"[^>]*>([^<]+)</a>',  # Common song path pattern
-            r'<a\s+href="(/charts/[^"]*)"[^>]*>([^<]+)</a>',  # Common charts path pattern
-        ]
+        for section in sections:
+            # Process main segment
+            main_segment = section.get("MainSegment", {})
+            if main_segment and "Chords" in main_segment:
+                chords = self._parse_chord_string(main_segment["Chords"])
+                all_chords.extend(chords)
+            
+            # Process endings
+            endings = section.get("Endings", [])
+            for ending in endings:
+                if "Chords" in ending:
+                    chords = self._parse_chord_string(ending["Chords"])
+                    all_chords.extend(chords)
         
-        for pattern in patterns:
-            matches = re.findall(pattern, html, re.IGNORECASE)
-            for link_path, title in matches:
-                title = self._clean_title(title)
-                if title and len(title) > 2:
-                    links.append((title, link_path))
-        
-        # Remove duplicates
-        unique_links = []
-        seen = set()
-        for title, path in links:
-            if title not in seen:
-                seen.add(title)
-                unique_links.append((title, path))
-        
-        return unique_links
+        return all_chords
     
-    def _try_common_paths(self) -> List[tuple]:
-        """Try common URL paths where standards might be located"""
-        common_paths = [
-            ("/songs/", "Songs Directory"),
-            ("/charts/", "Charts Directory"), 
-            ("/jazz-standards/", "Jazz Standards"),
-            ("/real-book/", "Real Book"),
-            ("/pdf/", "PDF Charts"),
-        ]
+    def _parse_chord_string(self, chord_string: str) -> List[JazzChord]:
+        """Parse a chord string like 'D9|Fm6|D9|Fm6|C|C7,B7,Bb7,A7' into JazzChord objects"""
+        chords = []
         
-        links = []
-        for path, title in common_paths:
-            try:
-                url = f"{self.base_url}{path}"
-                response = self.session.get(url, timeout=10)
-                if response.status_code == 200:
-                    # Extract links from this directory
-                    page_links = self._extract_links_from_directory(response.text, path)
-                    links.extend(page_links)
-            except:
+        # Split by bars (|) and then by chords within bars (,)
+        bars = chord_string.split('|')
+        
+        for bar in bars:
+            bar = bar.strip()
+            if not bar:
                 continue
+            
+            # Split multiple chords in same bar (comma-separated)
+            bar_chords = bar.split(',')
+            
+            for chord_str in bar_chords:
+                chord_str = chord_str.strip()
+                if chord_str:
+                    jazz_chord = self._parse_single_chord(chord_str)
+                    if jazz_chord:
+                        chords.append(jazz_chord)
         
-        return links
+        return chords
     
-    def _extract_links_from_directory(self, html: str, base_path: str) -> List[tuple]:
-        """Extract links from a directory listing page"""
-        links = []
-        
-        # Look for links to PDF files or song pages
-        pdf_pattern = r'<a\s+href="([^"]*\.pdf)"[^>]*>([^<]+)</a>'
-        pdf_matches = re.findall(pdf_pattern, html, re.IGNORECASE)
-        
-        for pdf_path, title in pdf_matches:
-            title = self._clean_title(title)
-            if title:
-                # Make sure path is absolute
-                if not pdf_path.startswith('http'):
-                    pdf_path = f"{base_path}{pdf_path}" if pdf_path.startswith('/') else f"{base_path}/{pdf_path}"
-                links.append((title, pdf_path))
-        
-        return links
-    
-    def _scrape_individual_standard(self, title: str, link_path: str) -> Optional[Dict]:
-        """Scrape an individual standard"""
+    def _parse_single_chord(self, chord_str: str):
+        """Parse a single chord symbol into JazzChord object"""
         try:
-            # Handle different types of links
-            if link_path.lower().endswith('.pdf'):
-                # Direct PDF link - we can't easily parse PDF, so use title-based fallback
-                chords = self._generate_progression_from_title(title)
-                return {
-                    'title': title,
-                    'progression': chords,
-                    'source': 'jazzstudies.us',
-                    'pdf_url': f"{self.base_url}{link_path}" if link_path.startswith('/') else link_path,
-                    'has_pdf': True
-                }
-            else:
-                # HTML page - visit it to find PDF links
-                url = f"{self.base_url}{link_path}" if link_path.startswith('/') else link_path
-                response = self.session.get(url, timeout=15)
-                response.raise_for_status()
-                
-                # Look for PDF links on the page
-                pdf_links = self._extract_pdf_links_from_page(response.text)
-                chords = self._generate_progression_from_title(title)
-                
-                pdf_url = None
-                if pdf_links:
-                    pdf_url = pdf_links[0]
-                    if not pdf_url.startswith('http'):
-                        pdf_url = f"{self.base_url}{pdf_url}" if pdf_url.startswith('/') else f"{url}/{pdf_url}"
-                
-                return {
-                    'title': title,
-                    'progression': chords,
-                    'source': 'jazzstudies.us', 
-                    'pdf_url': pdf_url,
-                    'has_pdf': pdf_url is not None
-                }
-                
-        except Exception as e:
-            print(f"    Error scraping {title}: {e}")
-            return None
-    
-    def _extract_pdf_links_from_page(self, html: str) -> List[str]:
-        """Extract PDF links from a page"""
-        pdf_links = []
-        pdf_pattern = r'href="([^"]*\.pdf)"'
-        matches = re.findall(pdf_pattern, html, re.IGNORECASE)
-        
-        for pdf_link in matches:
-            # Filter out unlikely PDFs (like resumes, documents, etc.)
-            if any(keyword in pdf_link.lower() for keyword in ['chart', 'lead', 'song', 'standard', 'jazz']):
-                pdf_links.append(pdf_link)
-            elif not any(keyword in pdf_link.lower() for keyword in ['resume', 'cv', 'document', 'form']):
-                # Include if it doesn't look like a document
-                pdf_links.append(pdf_link)
-        
-        return pdf_links
-    
-    def _clean_title(self, title: str) -> str:
-        """Clean and normalize title"""
-        title = re.sub(r'<[^>]+>', '', title)
-        title = re.sub(r'\.pdf$', '', title, flags=re.IGNORECASE)
-        title = re.sub(r'[_-]', ' ', title)
-        title = ' '.join(word.capitalize() for word in title.split())
-        return title.strip()
-    
-    def _generate_progression_from_title(self, title: str) -> List[JazzChord]:
-        """Generate appropriate chord progression based on standard title"""
-        # Comprehensive mapping of known standards to their progressions
-        progression_map = {
-            # Autumn Leaves (multiple keys)
-            'autumn leaves': ['Em7', 'A7', 'DM7', 'GM7', 'Cm7b5', 'F7', 'Bm7'],
+            # Clean the chord string
+            chord_str = chord_str.strip()
+            if not chord_str:
+                return None
             
-            # Blues
-            'all blues': ['G7', 'G7', 'G7', 'G7', 'C7', 'C7', 'G7', 'G7', 'D7', 'Eb7', 'D7', 'C7'],
-            'blue monk': ['Bb7', 'Eb7', 'Bb7', 'Bb7', 'Eb7', 'Eb7', 'Bb7', 'G7', 'C7', 'F7'],
-            'billies bounce': ['F7', 'Bb7', 'F7', 'F7', 'Bb7', 'Bb7', 'F7', 'D7', 'Gm7', 'C7'],
-            
-            # Modal
-            'so what': ['Dm7', 'Dm7', 'Dm7', 'Dm7', 'Ebm7', 'Ebm7', 'Dm7', 'Dm7'],
-            'impressions': ['Dm7', 'Dm7', 'Dm7', 'Dm7', 'Ebm7', 'Ebm7', 'Dm7', 'Dm7'],
-            'maiden voyage': ['Dm7', 'Fm7', 'Ebm7', 'Dm7', 'Dm7', 'Fm7', 'Ebm7', 'Dm7'],
-            
-            # Bossa/Latin
-            'blue bossa': ['Cm7', 'Cm7', 'Fm7', 'Fm7', 'Dm7b5', 'G7', 'Ebm7', 'Ab7', 'DbM7'],
-            'girl from ipanema': ['F#m7', 'F#m7', 'Dm7', 'Dm7', 'G7', 'G7', 'CM7', 'CM7'],
-            'song for my father': ['F#m7', 'F#m7', 'B7', 'B7', 'F#m7', 'F#m7', 'C#7', 'C#7'],
-            
-            # Jazz Standards
-            'all the things you are': ['Fm7', 'Bbm7', 'Eb7', 'AbM7', 'DbM7', 'Dm7', 'G7', 'CM7'],
-            'stella by starlight': ['Em7b5', 'A7', 'Dm7', 'G7', 'CM7', 'CM7', 'F7', 'F7'],
-            'body and soul': ['Em7', 'A7', 'Dm7', 'G7', 'CM7', 'E7', 'Am7', 'D7', 'Gm7', 'C7'],
-            'round midnight': ['Ebm7', 'Ebm7', 'Ab7', 'Ab7', 'DbM7', 'DbM7', 'Cm7', 'F7'],
-            'misty': ['EbM7', 'Cm7', 'Fm7', 'Bb7', 'EbM7', 'Ab7', 'DbM7', 'DbM7'],
-            'my funny valentine': ['Cm7', 'Cm7', 'Cm7', 'Cm7', 'Fm7', 'Fm7', 'Bb7', 'Bb7'],
-            
-            # Rhythm Changes
-            'rhythm changes': ['BbM7', 'G7', 'Cm7', 'F7', 'BbM7', 'BbM7', 'Gm7', 'C7'],
-            'oleo': ['BbM7', 'G7', 'Cm7', 'F7', 'BbM7', 'BbM7', 'Gm7', 'C7'],
-            
-            # Bebop
-            'confirmation': ['FM7', 'FM7', 'Fm7', 'Bb7', 'EbM7', 'EbM7', 'Am7', 'D7', 'Gm7', 'C7'],
-            'donna lee': ['Am7', 'D7', 'GM7', 'GM7', 'Cm7', 'F7', 'BbM7', 'BbM7'],
-            'ornithology': ['Am7', 'D7', 'GM7', 'GM7', 'Cm7', 'F7', 'BbM7', 'Eb7'],
-            
-            # Other classics
-            'take the a train': ['CM7', 'CM7', 'CM7', 'CM7', 'Dm7', 'G7', 'Dm7', 'G7'],
-            'summertime': ['Am7', 'Em7', 'Am7', 'Em7', 'CM7', 'G7', 'Am7', 'Em7'],
-            'fly me to the moon': ['Am7', 'Dm7', 'G7', 'CM7', 'F7', 'Bm7b5', 'E7', 'Am7'],
-            'there will never be another you': ['EbM7', 'EbM7', 'Cm7', 'F7', 'Bb7', 'Bb7', 'EbM7', 'Ab7'],
-            'someday my prince will come': ['Gm7', 'Gm7', 'Cm7', 'Cm7', 'F7', 'F7', 'BbM7', 'BbM7'],
-        }
-        
-        title_lower = title.lower()
-        
-        # Try exact matches first
-        for key, chords in progression_map.items():
-            if key in title_lower:
-                return [self._parse_chord_symbol(c) for c in chords if self._parse_chord_symbol(c)]
-        
-        # Try partial matches
-        for key, chords in progression_map.items():
-            if any(word in title_lower for word in key.split()):
-                return [self._parse_chord_symbol(c) for c in chords if self._parse_chord_symbol(c)]
-        
-        # Fallback: simple ii-V-I progression
-        return [self._parse_chord_symbol(c) for c in ['Dm7', 'G7', 'CM7'] if self._parse_chord_symbol(c)]
-    
-    def _create_fallback_standard(self, title: str) -> Dict:
-        """Create standard with fallback progression"""
-        chords = self._generate_progression_from_title(title)
-        return {
-            'title': title,
-            'progression': chords,
-            'source': 'fallback',
-            'has_pdf': False
-        }
-    
-    def _parse_chord_symbol(self, chord_str: str) -> Optional[JazzChord]:
-        """Parse chord symbol to JazzChord"""
-        try:
-            chord_str = chord_str.strip().replace(' ', '')
+            # Extract root note (first character plus optional # or b)
             root_match = re.match(r'^([A-G][#b]?)', chord_str)
             if not root_match:
                 return None
@@ -282,114 +114,161 @@ class JazzStudiesScraper:
             root = root_match.group(1)
             rest = chord_str[len(root):]
             
-            quality_map = {
-                'maj7': 'maj7', 'maj': 'maj7', 'M7': 'maj7', 'M': 'maj7',
-                'm7': 'm7', 'm': 'm7', 'min7': 'm7', 'mi7': 'm7', '-7': 'm7', '-': 'm7',
-                '7': '7', 'dom7': '7',
-                'm7b5': 'm7b5', 'ø': 'm7b5',
-                'dim7': 'dim7', 'dim': 'dim7',
-            }
+            # Handle special cases and map to standard quality
+            quality = self._determine_chord_quality(rest)
             
-            quality = 'maj7'
-            for pattern, std_quality in quality_map.items():
-                if pattern.lower() in rest.lower():
-                    quality = std_quality
-                    break
-            
-            extensions = []
-            ext_patterns = {'9': '9', '11': '11', '13': '13', 'b9': 'b9', '#9': '#9', '#11': '#11', 'b13': 'b13'}
-            for ext_pattern, ext_name in ext_patterns.items():
-                if ext_pattern in rest:
-                    extensions.append(ext_name)
+            # Extract extensions
+            extensions = self._extract_extensions(rest)
             
             return JazzChord(root, quality, extensions)
             
-        except Exception:
+        except Exception as e:
+            print(f"    Warning: Could not parse chord '{chord_str}': {e}")
             return None
     
-    def _get_comprehensive_fallback_data(self) -> List[Dict]:
-        """Comprehensive fallback when scraping fails"""
-        print("Using comprehensive fallback dataset...")
+    def _determine_chord_quality(self, rest: str) -> str:
+        """Determine the chord quality from the remaining part of the chord symbol"""
+        # Default to dominant 7th if no quality specified but has extensions
+        if not rest:
+            return "7"
         
-        standards_list = [
-            "Autumn Leaves", "All Blues", "So What", "Blue Bossa", "Take The A Train",
-            "All The Things You Are", "Stella By Starlight", "Body And Soul", 
-            "Round Midnight", "Misty", "My Funny Valentine", "Summertime",
-            "Girl From Ipanema", "Fly Me To The Moon", "There Will Never Be Another You",
-            "Oleo", "Anthropology", "Confirmation", "Donna Lee", "Ornithology",
-            "Night In Tunisia", "A Foggy Day", "Embraceable You", "Someday My Prince Will Come",
-            "Nardis", "Maiden Voyage", "Impressions", "Giant Steps", "Moment's Notice",
-            "Blue Monk", "Straight No Chaser", "Billie's Bounce", "Now's The Time",
-            "Freddie Freeloader", "Cantaloupe Island", "Watermelon Man", "Song For My Father",
-            "St. Thomas", "Speak No Evil", "Recordame", "Windows", "Dolphin Dance"
-        ]
+        # Check for specific quality indicators
+        quality_indicators = {
+            # Major types
+            "6": "maj7",  # In jazz, 6 often implies maj7 context
+            "M7": "maj7", "M": "maj7", "Δ": "maj7",
+            # Minor types  
+            "m7": "m7", "m": "m7", "mi": "m7", "min": "m7", "-7": "m7", "-": "m7",
+            # Dominant types
+            "7": "7", "9": "7", "11": "7", "13": "7",
+            # Half-diminished
+            "m7b5": "m7b5", "ø": "m7b5", "hdim": "m7b5",
+            # Diminished
+            "dim": "dim7", "°": "dim7",
+            # Suspended
+            "sus": "7sus4", "sus4": "7sus4", "sus2": "7sus2"
+        }
         
-        standards = []
-        for title in standards_list:
-            standard = self._create_fallback_standard(title)
-            if standard:
-                standards.append(standard)
+        # Look for quality indicators in order of specificity
+        for indicator, quality in quality_indicators.items():
+            if indicator in rest:
+                return quality
         
-        return standards
+        # If we have a number but no other quality, assume dominant
+        if any(char.isdigit() for char in rest):
+            return "7"
+        
+        # Default to major 7th for chords with just a root
+        return "maj7"
     
-    def save_standards(self, standards: List[Dict], filename: str = "jazzstudies_standards.json"):
-        """Save standards to JSON"""
-        filepath = os.path.join(self.data_dir, filename)
+    def _extract_extensions(self, rest: str) -> List[str]:
+        """Extract chord extensions from the chord symbol"""
+        extensions = []
         
-        serializable = []
-        for standard in standards:
-            serial_std = standard.copy()
-            serial_std['progression'] = [
-                {'root': c.root, 'quality': c.quality, 'extensions': c.extensions}
-                for c in standard['progression']
-            ]
-            serializable.append(serial_std)
+        extension_patterns = {
+            "9": "9", "11": "11", "13": "13",
+            "b9": "b9", "#9": "#9", 
+            "#11": "#11", 
+            "b13": "b13"
+        }
         
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(serializable, f, indent=2, ensure_ascii=False)
+        for pattern, ext_name in extension_patterns.items():
+            if pattern in rest:
+                extensions.append(ext_name)
         
-        print(f"💾 Saved {len(standards)} standards to {filepath}")
-    
-    def get_training_data(self) -> List[List[JazzChord]]:
-        """Get training data - will scrape if no saved data exists"""
-        saved_file = os.path.join(self.data_dir, "jazzstudies_standards.json")
-        if os.path.exists(saved_file):
-            print("📂 Loading saved standards...")
-            with open(saved_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            standards = []
-            for item in data:
-                progression = [
-                    JazzChord(c['root'], c['quality'], c.get('extensions', []))
-                    for c in item['progression']
-                ]
-                standards.append({'title': item['title'], 'progression': progression})
-        else:
-            print("🔄 No saved data found, scraping website...")
-            standards = self.scrape_all_standards()
-            if standards:
-                self.save_standards(standards)
-        
-        training_data = [std["progression"] for std in standards if len(std["progression"]) >= 2]
-        print(f"🎯 Training data: {len(training_data)} progressions")
-        return training_data
+        return extensions
 
-def main():
-    """Run the scraper"""
-    scraper = JazzStudiesScraper()
-    training_data = scraper.get_training_data()
+class JazzStandardsTrainer:
+    """Trains Markov chain using jazz standards data"""
     
-    if training_data:
-        total_chords = sum(len(prog) for prog in training_data)
-        print(f"\n📊 Final Dataset:")
-        print(f"   • {len(training_data)} progressions")
-        print(f"   • {total_chords} total chords")
-        print(f"   • {total_chords/len(training_data):.1f} chords per progression")
+    def __init__(self):
+        self.parser = JazzStandardsParser()
+        self.markov_chain = MarkovChain(order=2)
+    
+    def train_from_json(self, json_file_path: str) -> MarkovChain:
+        """Train Markov chain from JSON standards file"""
+        print("🎯 Training Markov chain from jazz standards...")
         
-        print(f"\n🎵 First 6 progressions:")
-        for i, prog in enumerate(training_data[:6]):
-            chords_str = ' → '.join(str(chord) for chord in prog[:4])
-            print(f"   {i+1}. {chords_str}...")
+        # Parse the JSON file
+        training_data = self.parser.parse_json_file(json_file_path)
+        
+        if not training_data:
+            print("❌ No training data found!")
+            return self.markov_chain
+        
+        # Train the Markov chain
+        self.markov_chain.train(training_data)
+        
+        # Print training statistics
+        self._print_training_stats(training_data)
+        
+        return self.markov_chain
+    
+    def _print_training_stats(self, training_data: List[List[JazzChord]]):
+        """Print statistics about the training data"""
+        total_standards = len(training_data)
+        total_chords = sum(len(prog) for prog in training_data)
+        avg_chords = total_chords / total_standards if total_standards > 0 else 0
+        
+        print(f"\n📊 Training Statistics:")
+        print(f"   • {total_standards} jazz standards")
+        print(f"   • {total_chords} total chords")
+        print(f"   • {avg_chords:.1f} chords per standard")
+        print(f"   • {len(self.markov_chain.transitions)} Markov states learned")
+        
+        # Show chord distribution
+        chord_counts = {}
+        for progression in training_data:
+            for chord in progression:
+                chord_str = str(chord)
+                chord_counts[chord_str] = chord_counts.get(chord_str, 0) + 1
+        
+        print(f"\n🎹 Most common chords:")
+        for chord, count in sorted(chord_counts.items(), key=lambda x: x[1], reverse=True)[:10]:
+            print(f"   {chord}: {count} times")
+    
+    def test_generation(self, num_sequences: int = 5):
+        """Test chord progression generation"""
+        print(f"\n🧪 Generating {num_sequences} sample progressions:")
+        
+        for i in range(num_sequences):
+            progression = self.markov_chain.generate_sequence(
+                length=8, 
+                temperature=0.5 + (i * 0.1)  # Vary creativity
+            )
+            chords_str = " | ".join(str(chord) for chord in progression)
+            print(f"   {i+1}. {chords_str}")
+
+# Example usage with your specific JSON format
+def main():
+    """Main function to train from JSON standards file"""
+    
+    # Initialize trainer
+    trainer = JazzStandardsTrainer()
+    
+    # Path to your JSON file - update this to your actual file path
+    json_file_path = "/Users/rileywade/Documents/MUSIC APP/Chord-Generator/JazzStandards/JazzStandards.json"  # Change this to your actual file path
+    
+    # Train the model
+    markov_chain = trainer.train_from_json(json_file_path)
+    
+    # Test generation
+    trainer.test_generation()
+    
+    # Save the trained model
+    markov_chain.save_model("trained_jazz_model.json")
+    print(f"\n💾 Model saved to 'trained_jazz_model.json'")
+    
+    return markov_chain
+
+# Alternative: If you want to use this in your main app
+def integrate_with_main_app(json_file_path: str):
+    """Integrate this parser with your main application"""
+    trainer = JazzStandardsTrainer()
+    markov_chain = trainer.train_from_json(json_file_path)
+    
+    # Now you can use markov_chain in your main app
+    return markov_chain
 
 if __name__ == "__main__":
     main()
