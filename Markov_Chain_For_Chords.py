@@ -250,28 +250,64 @@ class MarkovChain:
         with open(filepath, 'w') as f:
             json.dump(model_data, f, indent=2)
     
-    def load_model(self, filepath: str) -> None:
-        """Load a trained model from a file"""
-        with open(filepath, 'r') as f:
-            model_data = json.load(f)
-        
-        self.order = model_data['order']
-        
-        # Reconstruct transitions
-        self._probabilities = {}
-        for state_str, probs in model_data['transitions'].items():
-            state_chords = [self._parse_chord_string(chord_str) 
-                          for chord_str in json.loads(state_str)]
-            self._probabilities[tuple(state_chords)] = {
-                self._parse_chord_string(chord_str): prob 
-                for chord_str, prob in probs.items()
-            }
-        
-        # Reconstruct vocabulary and start states
-        self.chord_vocab = {self._parse_chord_string(chord_str) 
-                          for chord_str in model_data['chord_vocab']}
-        self.start_states = [[tuple(self._parse_chord_string(chord_str)) for chord_str in state]
-                            for state in model_data['start_states']]
+    # Add this method to your Markov_Chain_For_Chords.py file in the MarkovChain class
+    def load_model_fixed(self, filepath: str) -> None:
+        """Fixed model loading that properly reconstructs transitions"""
+        try:
+            with open(filepath, 'r') as f:
+                model_data = json.load(f)
+            
+            self.order = model_data['order']
+            self.transitions = defaultdict(Counter)
+            
+            # Reconstruct transitions from probabilities
+            for state_str, probabilities in model_data['transitions'].items():
+                state_chord_strings = json.loads(state_str)
+                state_chords = []
+                
+                for chord_str in state_chord_strings:
+                    jazz_chord = self._parse_chord_string(chord_str)
+                    if jazz_chord:
+                        state_chords.append(jazz_chord)
+                
+                if state_chords:
+                    state_tuple = tuple(state_chords)
+                    
+                    # Convert probabilities back to counts (approximate)
+                    for chord_str, prob in probabilities.items():
+                        jazz_chord = self._parse_chord_string(chord_str)
+                        if jazz_chord:
+                            # Convert probability to approximate count
+                            # We use a base count so transitions work properly
+                            count = max(1, int(prob * 100))
+                            self.transitions[state_tuple][jazz_chord] = count
+            
+            # Recompute probabilities
+            self._compute_probabilities()
+            
+            # Reconstruct vocabulary
+            self.chord_vocab = set()
+            for state in self.transitions.keys():
+                self.chord_vocab.update(state)
+            for next_chords in self.transitions.values():
+                self.chord_vocab.update(next_chords.keys())
+            
+            # Reconstruct start states
+            self.start_states = []
+            for state_list in model_data.get('start_states', []):
+                state_chords = []
+                for chord_str in state_list:
+                    jazz_chord = self._parse_chord_string(chord_str)
+                    if jazz_chord:
+                        state_chords.append(jazz_chord)
+                if state_chords:
+                    self.start_states.append(tuple(state_chords))
+            
+            print(f"✅ Model loaded: {len(self.transitions)} transitions, {len(self.chord_vocab)} chords")
+            
+        except Exception as e:
+            print(f"❌ Error loading model: {e}")
+            raise
 
 # Example usage and testing
 def create_sample_progressions() -> List[List[JazzChord]]:

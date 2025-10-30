@@ -1,4 +1,5 @@
 # main_app.py
+import pickle
 import random
 import json
 from typing import List, Dict, Tuple, Optional
