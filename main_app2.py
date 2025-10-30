@@ -66,16 +66,15 @@ class JazzChordGeneratorApp:
         print(f"✅ Reconstructed {len(self.markov_chain.transitions)} transitions")
     
     def process_user_melody(self, 
-                          melody_notes: List[Note], 
-                          creativity: float = 0.5,
-                          progression_length: int = 8,
-                          use_key_constraints: bool = True) -> List[JazzChord]:
+                       melody_notes: List[Note], 
+                       creativity: float = 0.5,
+                       progression_length: int = 8,
+                       use_key_constraints: bool = True) -> List[JazzChord]:
         """
-        Process user melody and generate chord progression using pre-trained model
+        Process user melody and generate chord progression using creativity-scaled generation
         """
-        print("\n" + "="*50)
-        print("GENERATING CHORD PROGRESSION")
-        print("="*50)
+        print(f"\n🎹 Generating progression (creativity: {creativity})")
+        print("=" * 50)
         
         # Step 1: Detect key from melody
         if use_key_constraints:
@@ -85,17 +84,12 @@ class JazzChordGeneratorApp:
             self.current_key = None
             print("🎵 Key constraints: Disabled")
         
-        # Step 2: Analyze phrases for better chord placement
-        phrases = self.phrase_analyzer.analyze_phrases(melody_notes)
-        print(f"📝 Detected {len(phrases)} musical phrases")
-        
-        # Step 3: Generate progression using pre-trained model
-        progression = self._generate_intelligent_progression(
-            melody_notes, 
-            phrases,
-            progression_length, 
-            creativity,
-            use_key_constraints
+        # Step 2: Use creativity-scaled generation
+        key_root = self.current_key.tonic if self.current_key else None
+        progression = self.generate_progression_with_creativity(
+            length=progression_length,
+            creativity=creativity,
+            key=key_root
         )
         
         self.current_progression = progression
@@ -586,6 +580,171 @@ class JazzChordGeneratorApp:
                         next_chord = random.choice(list(self.markov_chain.chord_vocab))
             
             progression.append(next_chord)
+        
+        return progression
+    
+    def generate_with_scaled_extensions(self, length=8, creativity=0.5):
+        """Generate progression with extension usage that scales with creativity"""
+        import random
+        
+        # Map creativity to extension parameters
+        extension_params = {
+            # creativity: (min_extended_ratio, extension_bias, force_chance)
+            0.1: (0.1, 0.1, 0.1),   # Very conservative
+            0.3: (0.2, 0.2, 0.2),   # Conservative
+            0.5: (0.3, 0.3, 0.3),   # Balanced
+            0.7: (0.5, 0.5, 0.5),   # Creative
+            0.9: (0.7, 0.7, 0.7)    # Very creative
+        }
+        
+        # Find closest creativity level
+        closest_creativity = min(extension_params.keys(), key=lambda x: abs(x - creativity))
+        min_extended_ratio, extension_bias, force_chance = extension_params[closest_creativity]
+        
+        print(f"   Creativity {creativity}: {min_extended_ratio*100:.0f}% min extensions, {extension_bias*100:.0f}% bias")
+        
+        progression = []
+        
+        # Get lists of chord types
+        basic_chords = [c for c in self.markov_chain.chord_vocab if not c.extensions and 
+                    not any(x in str(c) for x in ['9', '11', '13', '#', 'b'])]
+        extended_chords = [c for c in self.markov_chain.chord_vocab if c not in basic_chords]
+        
+        if not extended_chords:
+            print("   ⚠️ No extended chords available, using basic generation")
+            return self.markov_chain.generate_sequence(length=length, temperature=creativity)
+        
+        # Start sequence - use extended chord based on creativity
+        if self.markov_chain.start_states:
+            start_state = random.choice(self.markov_chain.start_states)
+            # Convert start state chords to extended if creative enough
+            repaired_start = []
+            for chord in start_state:
+                if (chord in extended_chords and random.random() < extension_bias) or \
+                (chord in basic_chords and random.random() < extension_bias * 0.5):
+                    # Try to find an extended version of this chord
+                    extended_versions = [c for c in extended_chords if c.root == chord.root and c.quality == chord.quality]
+                    if extended_versions:
+                        repaired_start.append(random.choice(extended_versions))
+                    else:
+                        repaired_start.append(chord)
+                else:
+                    repaired_start.append(chord)
+            progression.extend(repaired_start)
+        else:
+            # Fallback start
+            if extended_chords and random.random() < extension_bias:
+                progression.append(random.choice(extended_chords))
+            else:
+                progression.append(random.choice(list(self.markov_chain.chord_vocab)))
+        
+        while len(progression) < length:
+            current_extended_ratio = len([c for c in progression if c in extended_chords]) / len(progression)
+            
+            # Decide whether to force an extended chord
+            should_force_extended = (
+                current_extended_ratio < min_extended_ratio and 
+                random.random() < force_chance
+            )
+            
+            if len(progression) >= self.markov_chain.order:
+                state = tuple(progression[-self.markov_chain.order:])
+                
+                if state in self.markov_chain._probabilities:
+                    candidates = self.markov_chain._probabilities[state].copy()
+                    
+                    if should_force_extended:
+                        # Force extended chord selection
+                        extended_candidates = {chord: prob for chord, prob in candidates.items() 
+                                            if chord in extended_chords}
+                        if extended_candidates:
+                            chords, probs = zip(*extended_candidates.items())
+                            next_chord = random.choices(chords, weights=probs, k=1)[0]
+                        else:
+                            # No extended options, use normal selection but bias
+                            chords, probs = zip(*candidates.items())
+                            weights = [prob * (1 + extension_bias) if chord in extended_chords else prob 
+                                    for chord, prob in zip(chords, probs)]
+                            next_chord = random.choices(chords, weights=weights, k=1)[0]
+                    else:
+                        # Normal selection with creativity-based bias
+                        chords, probs = zip(*candidates.items())
+                        weights = []
+                        for chord, prob in zip(chords, probs):
+                            if chord in extended_chords:
+                                # Boost extended chords based on creativity
+                                weight = prob * (1 + extension_bias)
+                            elif any(x in str(chord) for x in ['7', 'm7b5', 'dim7']):
+                                # Slight boost for tension chords
+                                weight = prob * (1 + extension_bias * 0.3)
+                            else:
+                                weight = prob
+                            weights.append(weight)
+                        
+                        next_chord = random.choices(chords, weights=weights, k=1)[0]
+                else:
+                    # Unknown state - choose based on creativity
+                    if should_force_extended or random.random() < extension_bias:
+                        next_chord = random.choice(extended_chords)
+                    else:
+                        next_chord = random.choice(list(self.markov_chain.chord_vocab))
+            else:
+                # Short sequence - choose based on creativity
+                if should_force_extended or random.random() < extension_bias:
+                    next_chord = random.choice(extended_chords)
+                else:
+                    next_chord = random.choice(list(self.markov_chain.chord_vocab))
+            
+            progression.append(next_chord)
+        
+        return progression
+
+    def generate_progression_with_creativity(self, length=8, creativity=0.5, key=None):
+        """Main progression generation that respects creativity levels"""
+        print(f"🎹 Generating progression (creativity: {creativity})")
+        
+        # Choose generation method based on creativity
+        if creativity <= 0.3:
+            # Low creativity - use standard Markov with slight bias
+            return self._generate_conservative(length, creativity, key)
+        elif creativity <= 0.7:
+            # Medium creativity - use scaled extensions
+            return self.generate_with_scaled_extensions(length, creativity)
+        else:
+            # High creativity - use forced extensions
+            return self.generate_with_forced_extensions(length, min_extended_ratio=0.6)
+
+    def _generate_conservative(self, length=8, creativity=0.5, key=None):
+        """Conservative generation for low creativity levels"""
+        start_sequence = None
+        
+        if key and self.markov_chain.start_states:
+            for state in self.markov_chain.start_states:
+                if state and state[0].root == key:
+                    start_sequence = list(state)
+                    break
+        
+        # Use standard Markov with very slight extension bias
+        progression = self.markov_chain.generate_sequence(
+            length=length,
+            temperature=creativity,
+            start_sequence=start_sequence
+        )
+        
+        # Lightly sprinkle in a couple extended chords
+        if len(progression) >= 4:
+            extended_chords = [c for c in self.markov_chain.chord_vocab if c.extensions]
+            if extended_chords:
+                # Replace 1-2 chords with extended versions
+                num_to_replace = max(1, int(len(progression) * 0.1))  # 10% max
+                for _ in range(num_to_replace):
+                    idx = random.randint(2, len(progression) - 2)  # Avoid start/end
+                    original_chord = progression[idx]
+                    # Find extended version with same root/quality
+                    matching_extended = [c for c in extended_chords 
+                                    if c.root == original_chord.root and c.quality == original_chord.quality]
+                    if matching_extended:
+                        progression[idx] = random.choice(matching_extended)
         
         return progression
         
